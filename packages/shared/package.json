@@ -1,0 +1,15 @@
+{
+  "name": "@runzilla/shared",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts",
+    "./types": "./src/types.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.2"
+  }
+}
