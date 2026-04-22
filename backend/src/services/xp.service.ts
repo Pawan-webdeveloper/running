@@ -75,11 +75,15 @@ export async function updateStreakAndXP(
     throw new Error('Profile not found');
   }
 
+  const distance = runInput.distanceMeters ?? runInput.distance_meters ?? 0;
+  const pace = runInput.avgPaceSecPerKm ?? runInput.avg_pace_sec_per_km ?? 600;
+  const isManual = runInput.isManual ?? runInput.is_manual ?? false;
+
   const xpEarned = calculateXP(
-    runInput.distance_meters,
-    runInput.avg_pace_sec_per_km,
+    distance,
+    pace,
     profile.streak_days,
-    runInput.is_manual
+    isManual
   );
 
   const now = new Date();
@@ -132,7 +136,8 @@ export async function updateStreakAndXP(
   if (newStreak >= 30) badges.push(BADGES.STREAK_30);
   if (newStreak >= 100) badges.push(BADGES.STREAK_100);
 
-  const runStartHour = new Date(runInput.started_at).getUTCHours();
+  const runStartTime = runInput.startTime ?? runInput.started_at ?? new Date().toISOString();
+  const runStartHour = new Date(runStartTime).getUTCHours();
   if (runStartHour >= 0 && runStartHour < 6) {
     badges.push(BADGES.EARLY_BIRD);
   }
@@ -140,7 +145,7 @@ export async function updateStreakAndXP(
     badges.push(BADGES.NIGHT_OWL);
   }
 
-  if (runInput.avg_pace_sec_per_km < 300) {
+  if (pace < 300) {
     badges.push(BADGES.SPEED_DEMON);
   }
 
