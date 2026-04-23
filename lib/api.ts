@@ -1,8 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Platform } from 'react-native';
+import { deleteStoredItem, getStoredItem, setStoredItem } from './authStorage';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://ujrmxfvhaifgdipzkmfb.supabase.co';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_KEY || '';
@@ -41,12 +41,16 @@ let authToken: string | null = null;
 
 export async function setAuthToken(token: string) {
   authToken = token;
-  await SecureStore.setItemAsync('auth_token', token);
+  if (token) {
+    await setStoredItem('auth_token', token);
+  } else {
+    await deleteStoredItem('auth_token');
+  }
 }
 
 export async function getAuthToken(): Promise<string | null> {
   if (authToken) return authToken;
-  return SecureStore.getItemAsync('auth_token');
+  return getStoredItem('auth_token');
 }
 
 async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -158,7 +162,7 @@ const auth = {
 
   signOut: async () => {
     const { error } = await supabase.auth.signOut();
-    await SecureStore.deleteItemAsync('auth_token');
+    await deleteStoredItem('auth_token');
     authToken = null;
     return { error: error?.message };
   },
