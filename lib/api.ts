@@ -1,7 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Platform } from 'react-native';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://ujrmxfvhaifgdipzkmfb.supabase.co';
@@ -30,12 +29,6 @@ function normalizeApiUrl(url: string): string {
 
 const API_URL = normalizeApiUrl(process.env.EXPO_PUBLIC_API_URL || defaultApiUrl);
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-
-if (googleWebClientId) {
-  GoogleSignin.configure({
-    webClientId: googleWebClientId,
-  });
-}
 
 let authToken: string | null = null;
 
@@ -71,12 +64,24 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 
 export async function signInWithGoogle(): Promise<{ error?: string; data?: any }> {
   try {
+    if (Constants.appOwnership === 'expo') {
+      return {
+        error:
+          'Google native sign-in needs a Development Build (not Expo Go). Build with `npx expo run:android` or EAS.',
+      };
+    }
+
     if (!googleWebClientId) {
       return {
         error:
           'Google sign-in is not configured. Set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in your app env.',
       };
     }
+
+    const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+    GoogleSignin.configure({
+      webClientId: googleWebClientId,
+    });
 
     await GoogleSignin.hasPlayServices();
     await GoogleSignin.signOut().catch(() => undefined);
