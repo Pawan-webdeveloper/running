@@ -104,15 +104,25 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     }, 1000);
 
     const result = await updateStreakAndXP(userId, {
+      userId,
       user_id: userId,
-      started_at,
-      ended_at,
-      distance_meters,
+      distanceMeters,
+      distance_meters: distance_meters,
+      durationSecs,
+      duration_secs: duration_seconds,
       duration_seconds,
+      avgPaceSecPerKm: avg_pace_sec_per_km,
       avg_pace_sec_per_km,
       elevation_gain_m,
+      elevation_gain: elevation_gain_m,
+      gpsPoints: gps_points || [],
       gps_points: gps_points || [],
       is_manual,
+      isManual: is_manual,
+      startTime: started_at,
+      started_at,
+      endTime: ended_at,
+      ended_at,
       route_image_url,
     });
 

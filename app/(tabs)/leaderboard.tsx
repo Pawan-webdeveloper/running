@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Platform } from 'react-native';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -10,21 +10,25 @@ export default function LeaderboardScreen() {
   const [scope, setScope] = useState<'national' | `city:${string}`>('national');
   const [entries, setEntries] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const isLocalWebPreview = Platform.OS === 'web' && api.auth.getApiUrl().includes('localhost:3000');
 
   const loadLeaderboard = async () => {
+    if (isLocalWebPreview) {
+      setEntries([]);
+      return;
+    }
+
     try {
       const result = await api.leaderboard.get(scope, 50);
-      if (result.data) {
-        setEntries(result.data.leaderboard || []);
-      }
-    } catch (error) {
-      console.error('Failed to load leaderboard:', error);
+      setEntries(result?.leaderboard || []);
+    } catch {
+      setEntries([]);
     }
   };
 
   useEffect(() => {
     loadLeaderboard();
-  }, [scope]);
+  }, [scope, isLocalWebPreview]);
 
   const onRefresh = async () => {
     setRefreshing(true);

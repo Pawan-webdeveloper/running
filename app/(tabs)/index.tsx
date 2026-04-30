@@ -7,6 +7,7 @@ import {
   ScrollView,
   RefreshControl,
   Image,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { api } from '@/lib/api';
@@ -15,34 +16,49 @@ import { useAuthStore } from '@/stores/authStore';
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const isLocalWebPreview = Platform.OS === 'web' && api.auth.getApiUrl().includes('localhost:3000');
 
   const [weekStats, setWeekStats] = useState({ km: 0, xp: 0, rank: null as number | null });
   const [recentRuns, setRecentRuns] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = async () => {
-    try {
-      const [runsRes, leaderboardRes] = await Promise.all([
-        api.runs.getRecent(5),
-        api.leaderboard.get('national', 10),
-      ]);
-
-      if (runsRes.data) {
-        const runs = runsRes.data.runs || [];
-        setRecentRuns(runs);
-        
-        const totalKm = runs.reduce((sum: number, r: any) => sum + (r.distance_meters || 0) / 1000, 0);
-        const totalXp = runs.reduce((sum: number, r: any) => sum + (r.xp_earned || 0), 0);
-        setWeekStats({ km: totalKm, xp: totalXp, rank: null });
-      }
-    } catch (error) {
-      console.error('Failed to load data:', error);
+    if (isLocalWebPreview) {
+      setRecentRuns([]);
+      setWeekStats({ km: 0, xp: 0, rank: null });
+      return;
     }
+
+    const [runsResult, leaderboardResult] = await Promise.allSettled([
+      api.runs.getRecent(5),
+      api.leaderboard.get('national', 10),
+    ]);
+
+    if (runsResult.status === 'fulfilled') {
+      const runs = runsResult.value?.runs || [];
+      setRecentRuns(runs);
+
+      const totalKm = runs.reduce((sum: number, run: any) => sum + (run.distance_meters || 0) / 1000, 0);
+      const totalXp = runs.reduce((sum: number, run: any) => sum + (run.xp_earned || 0), 0);
+
+      let rank: number | null = null;
+      if (leaderboardResult.status === 'fulfilled') {
+        const leaderboard = leaderboardResult.value?.leaderboard || [];
+        const currentUserIndex = leaderboard.findIndex((entry: any) => entry.user_id === user?.id);
+        rank = currentUserIndex >= 0 ? currentUserIndex + 1 : null;
+      }
+
+      setWeekStats({ km: totalKm, xp: totalXp, rank });
+      return;
+    }
+
+    setRecentRuns([]);
+    setWeekStats({ km: 0, xp: 0, rank: null });
   };
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [isLocalWebPreview]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -193,10 +209,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 8px rgba(0, 0, 0, 0.12)',
     elevation: 3,
   },
   profileAvatar: {

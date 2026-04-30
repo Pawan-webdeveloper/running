@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import * as SecureStore from 'expo-secure-store';
 import { setAuthToken } from '@/lib/api';
+import { deleteStoredItem, getStoredItem, setStoredItem } from '@/lib/authStorage';
 
 interface User {
   id: string;
@@ -27,23 +27,23 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true,
 
   setAuth: async (token: string, user: User) => {
-    await SecureStore.setItemAsync('auth_token', token);
-    await SecureStore.setItemAsync('user_data', JSON.stringify(user));
+    await setStoredItem('auth_token', token);
+    await setStoredItem('user_data', JSON.stringify(user));
     await setAuthToken(token);
     set({ token, user });
   },
 
   logout: async () => {
-    await SecureStore.deleteItemAsync('auth_token');
-    await SecureStore.deleteItemAsync('user_data');
+    await deleteStoredItem('auth_token');
+    await deleteStoredItem('user_data');
     await setAuthToken('');
     set({ token: null, user: null });
   },
 
   loadAuth: async () => {
     try {
-      const token = await SecureStore.getItemAsync('auth_token');
-      const userData = await SecureStore.getItemAsync('user_data');
+      const token = await getStoredItem('auth_token');
+      const userData = await getStoredItem('user_data');
       if (token && userData) {
         await setAuthToken(token);
         set({ token, user: JSON.parse(userData) });

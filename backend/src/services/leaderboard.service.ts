@@ -50,7 +50,7 @@ export async function getLeaderboard(
   const week = weekStart || getWeekStart();
   const key = getLeaderboardKey(scope, week);
 
-  const results = await redis.zrevrange(key, 0, limit - 1, { withScore: true });
+  const results = await (redis as any).zrevrange(key, 0, limit - 1, { withScores: true });
 
   if (!results || results.length === 0) {
     return [];
@@ -77,11 +77,16 @@ export async function getLeaderboard(
     if (profile) {
       entries.push({
         rank: Math.floor(i / 2) + 1,
+        userId,
         user_id: userId,
+        name: profile.display_name || 'Runner',
         display_name: profile.display_name,
+        avatar: `avatar_${profile.avatar_index || 0}`,
         city: profile.city,
         avatar_index: profile.avatar_index,
         xp_score: score,
+        xp: score,
+        level: 1,
         is_current_user: false,
       });
     }
