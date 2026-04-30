@@ -27,8 +27,10 @@ function normalizeApiUrl(url: string): string {
   return url;
 }
 
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
+
 const API_URL = normalizeApiUrl(process.env.EXPO_PUBLIC_API_URL || defaultApiUrl);
-const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 
 let authToken: string | null = null;
 
@@ -68,47 +70,57 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 
 export async function signInWithGoogle(): Promise<{ error?: string; data?: any }> {
   try {
-    if (Constants.appOwnership === 'expo') {
-      return {
-        error:
-          'Google native sign-in needs a Development Build (not Expo Go). Build with `npx expo run:android` or EAS.',
-      };
-    }
-
-    if (!googleWebClientId) {
-      return {
-        error:
-          'Google sign-in is not configured. Set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in your app env.',
-      };
-    }
-
-    const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
-    GoogleSignin.configure({
-      webClientId: googleWebClientId,
-    });
-
-    await GoogleSignin.hasPlayServices();
-    await GoogleSignin.signOut().catch(() => undefined);
-    const response = await GoogleSignin.signIn();
-
-    const idToken = response.data?.idToken;
-    if (!idToken) {
-      return { error: 'Google sign-in failed: missing ID token' };
-    }
-
-    const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({
+    const redirectUrl = Linking.createURL('auth/callback');
+    
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      token: idToken,
+      options: {
+        redirectTo: redirectUrl,
+        skipBrowserRedirect: true,
+      },
     });
 
-    if (authError || !authData.session?.access_token) {
-      return { error: authError?.message || 'Failed to create Supabase session' };
+    if (error) {
+      return { error: error.message };
+    }
+
+    if (data?.url) {
+      const result = await WebBrowser.openAuthSessionAsync(
+        data.url,
+        Linking.createURL('/')
+      );
+
+      if (result.type === 'success') {
+        const url = new URL(result.url);
+        
+        if (url.pathname === '/auth/callback' || url.searchParams.has('access_token')) {
+          const accessToken = url.searchParams.get('access_token');
+          const refreshToken = url.searchParams.get('refresh_token');
+
+          if (accessToken) {
+            await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken || '',
+            });
+          } else {
+            return { error: 'Authentication failed' };
+          }
+        }
+      } else if (result.type === 'dismiss') {
+        return { error: 'Authentication cancelled' };
+      }
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if (!session?.access_token) {
+      return { error: 'Failed to get session' };
     }
 
     const responseApi = await fetch(`${API_URL}/api/auth/oauth-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: authData.session.access_token }),
+      body: JSON.stringify({ access_token: session.access_token }),
     });
 
     const backendData = await responseApi.json();
@@ -118,6 +130,7 @@ export async function signInWithGoogle(): Promise<{ error?: string; data?: any }
 
     return { data: backendData };
   } catch (error: any) {
+    console.error('Google sign in error:', error);
     return { error: error.message || 'Google sign in failed' };
   }
 }
@@ -199,6 +212,40 @@ const auth = {
       const data = await response.json();
       if (!response.ok) {
         return { error: data.error || 'Failed to verify OTP' };
+      }
+      return { data };
+    } catch (error: any) {
+      return { error: error.message || 'Network error' };
+    }
+  },
+
+  sendEmailOtp: async (email: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/auth/send-email-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { error: data.error || 'Failed to send email OTP' };
+      }
+      return { data };
+    } catch (error: any) {
+      return { error: error.message || 'Network error' };
+    }
+  },
+
+  verifyEmailOtp: async (email: string, otp: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/auth/verify-email-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, otp }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { error: data.error || 'Failed to verify email OTP' };
       }
       return { data };
     } catch (error: any) {

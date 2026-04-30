@@ -1,37 +1,39 @@
-import { useState } from 'react';
+import { api, setAuthToken } from "@/lib/api";
+import { useAuthStore } from "@/stores/authStore";
+import { useRouter } from "expo-router";
+import { useState } from "react";
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
   Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { api } from '@/lib/api';
-import { useAuthStore } from '@/stores/authStore';
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 export default function SignupScreen() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
 
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState<'details' | 'otp'>('details');
+  const [authMethod, setAuthMethod] = useState<"phone" | "email">("phone");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [step, setStep] = useState<"details" | "otp">("details");
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
 
-  const handleSendOtp = async () => {
+  const handleSendPhoneOtp = async () => {
     if (name.length < 2) {
-      Alert.alert('Error', 'Please enter your name');
+      Alert.alert("Error", "Please enter your name");
       return;
     }
     if (phone.length !== 10) {
-      Alert.alert('Error', 'Please enter a valid 10-digit phone number');
+      Alert.alert("Error", "Please enter a valid 10-digit phone number");
       return;
     }
 
@@ -40,15 +42,42 @@ export default function SignupScreen() {
     const result = await api.auth.sendOtp(fullPhone);
 
     if (result.error) {
-      Alert.alert('Error', result.error);
+      Alert.alert("Error", result.error);
       setLoading(false);
       return;
     }
 
-    setStep('otp');
+    setStep("otp");
     setLoading(false);
-    setResendTimer(30);
+    startResendTimer();
+  };
 
+  const handleSendEmailOtp = async () => {
+    if (name.length < 2) {
+      Alert.alert("Error", "Please enter your name");
+      return;
+    }
+    if (!email.includes("@")) {
+      Alert.alert("Error", "Please enter a valid email address");
+      return;
+    }
+
+    setLoading(true);
+    const result = await api.auth.sendEmailOtp(email);
+
+    if (result.error) {
+      Alert.alert("Error", result.error);
+      setLoading(false);
+      return;
+    }
+
+    setStep("otp");
+    setLoading(false);
+    startResendTimer();
+  };
+
+  const startResendTimer = () => {
+    setResendTimer(30);
     const timer = setInterval(() => {
       setResendTimer((prev) => {
         if (prev <= 1) {
@@ -62,24 +91,31 @@ export default function SignupScreen() {
 
   const handleVerifyOtp = async () => {
     if (otp.length !== 6) {
-      Alert.alert('Error', 'Please enter the 6-digit OTP');
+      Alert.alert("Error", "Please enter the 6-digit OTP");
       return;
     }
 
     setLoading(true);
-    const fullPhone = `+91${phone}`;
-    const result = await api.auth.verifyOtp(fullPhone, otp);
+
+    let result;
+    if (authMethod === "phone") {
+      const fullPhone = `+91${phone}`;
+      result = await api.auth.verifyOtp(fullPhone, otp);
+    } else {
+      result = await api.auth.verifyEmailOtp(email, otp);
+    }
 
     if (result.error) {
-      Alert.alert('Error', result.error);
+      Alert.alert("Error", result.error);
       setLoading(false);
       return;
     }
 
     if (result.data) {
-      const { token, is_new_user, profile } = result.data;
+      const { token, profile } = result.data;
+      await setAuthToken(token);
       await setAuth(token, profile);
-      router.replace('/(auth)/onboarding');
+      router.replace("/(auth)/onboarding");
     }
 
     setLoading(false);
@@ -88,7 +124,7 @@ export default function SignupScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.logoContainer}>
@@ -97,8 +133,51 @@ export default function SignupScreen() {
           <Text style={styles.subtitle}>Create your account</Text>
         </View>
 
+        <View style={styles.authTabs}>
+          <TouchableOpacity
+            style={[
+              styles.authTab,
+              authMethod === "phone" && styles.authTabActive,
+            ]}
+            onPress={() => {
+              setAuthMethod("phone");
+              setStep("details");
+              setOtp("");
+            }}
+          >
+            <Text
+              style={[
+                styles.authTabText,
+                authMethod === "phone" && styles.authTabTextActive,
+              ]}
+            >
+              Phone
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.authTab,
+              authMethod === "email" && styles.authTabActive,
+            ]}
+            onPress={() => {
+              setAuthMethod("email");
+              setStep("details");
+              setOtp("");
+            }}
+          >
+            <Text
+              style={[
+                styles.authTabText,
+                authMethod === "email" && styles.authTabTextActive,
+              ]}
+            >
+              Email
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.form}>
-          {step === 'details' ? (
+          {step === "details" ? (
             <>
               <Text style={styles.label}>Full Name</Text>
               <TextInput
@@ -109,26 +188,43 @@ export default function SignupScreen() {
                 autoCapitalize="words"
               />
 
-              <Text style={styles.label}>Phone Number</Text>
-              <View style={styles.phoneInput}>
-                <Text style={styles.countryCode}>+91</Text>
-                <TextInput
-                  style={styles.input}
-                  value={phone}
-                  onChangeText={setPhone}
-                  placeholder="Enter your number"
-                  keyboardType="phone-pad"
-                  maxLength={10}
-                />
-              </View>
+              {authMethod === "phone" ? (
+                <>
+                  <Text style={styles.label}>Phone Number</Text>
+                  <View style={styles.phoneInput}>
+                    <Text style={styles.countryCode}>+91</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={phone}
+                      onChangeText={setPhone}
+                      placeholder="Enter your number"
+                      keyboardType="phone-pad"
+                      maxLength={10}
+                    />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.label}>Email Address</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="Enter your email"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoComplete="email"
+                  />
+                </>
+              )}
 
               <TouchableOpacity
                 style={[styles.button, loading && styles.buttonDisabled]}
-                onPress={handleSendOtp}
+                onPress={authMethod === "phone" ? handleSendPhoneOtp : handleSendEmailOtp}
                 disabled={loading}
               >
                 <Text style={styles.buttonText}>
-                  {loading ? 'Sending...' : 'Send OTP'}
+                  {loading ? "Sending..." : "Send OTP"}
                 </Text>
               </TouchableOpacity>
 
@@ -142,7 +238,9 @@ export default function SignupScreen() {
           ) : (
             <>
               <Text style={styles.label}>Enter OTP</Text>
-              <Text style={styles.otpHint}>Sent to +91 {phone}</Text>
+              <Text style={styles.otpHint}>
+                Sent to {authMethod === "phone" ? `+91 ${phone}` : email}
+              </Text>
               <TextInput
                 style={styles.otpInput}
                 value={otp}
@@ -159,19 +257,19 @@ export default function SignupScreen() {
                 disabled={loading}
               >
                 <Text style={styles.buttonText}>
-                  {loading ? 'Verifying...' : 'Verify OTP'}
+                  {loading ? "Verifying..." : "Verify OTP"}
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.resendButton}
-                onPress={handleSendOtp}
+                onPress={authMethod === "phone" ? handleSendPhoneOtp : handleSendEmailOtp}
                 disabled={resendTimer > 0}
               >
                 <Text style={styles.resendText}>
                   {resendTimer > 0
                     ? `Resend OTP in ${resendTimer}s`
-                    : 'Resend OTP'}
+                    : "Resend OTP"}
                 </Text>
               </TouchableOpacity>
             </>
@@ -185,16 +283,16 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   content: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     padding: 24,
   },
   logoContainer: {
-    alignItems: 'center',
-    marginBottom: 48,
+    alignItems: "center",
+    marginBottom: 32,
   },
   logo: {
     fontSize: 64,
@@ -202,92 +300,116 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FF6B35',
+    fontWeight: "bold",
+    color: "#FF6B35",
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    color: "#666",
     marginTop: 4,
   },
+  authTabs: {
+    flexDirection: "row",
+    marginBottom: 24,
+    backgroundColor: "#f5f5f5",
+    borderRadius: 12,
+    padding: 4,
+  },
+  authTab: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderRadius: 8,
+  },
+  authTabActive: {
+    backgroundColor: "#FF6B35",
+  },
+  authTabText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#666",
+  },
+  authTabTextActive: {
+    color: "#fff",
+  },
   form: {
-    width: '100%',
+    width: "100%",
   },
   label: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 8,
-    color: '#333',
+    color: "#333",
   },
   input: {
     fontSize: 18,
     padding: 16,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: "#f5f5f5",
     borderRadius: 12,
     marginBottom: 16,
-    color: '#333',
+    color: "#333",
   },
   phoneInput: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f5f5f5",
     borderRadius: 12,
     paddingHorizontal: 16,
     marginBottom: 24,
   },
   countryCode: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: "600",
+    color: "#333",
     marginRight: 12,
   },
   otpHint: {
     fontSize: 14,
-    color: '#666',
+    color: "#666",
     marginBottom: 12,
   },
   otpInput: {
     fontSize: 32,
     padding: 16,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: "#f5f5f5",
     borderRadius: 12,
     marginBottom: 24,
     letterSpacing: 8,
   },
   button: {
-    backgroundColor: '#FF6B35',
+    backgroundColor: "#FF6B35",
     paddingVertical: 16,
     borderRadius: 12,
-    alignItems: 'center',
+    alignItems: "center",
   },
   buttonDisabled: {
-    backgroundColor: '#ccc',
+    backgroundColor: "#ccc",
   },
   buttonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   resendButton: {
     marginTop: 16,
-    alignItems: 'center',
+    alignItems: "center",
   },
   resendText: {
-    color: '#FF6B35',
+    color: "#FF6B35",
     fontSize: 16,
   },
   loginContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+    flexDirection: "row",
+    justifyContent: "center",
     marginTop: 24,
   },
   loginText: {
-    color: '#666',
+    color: "#666",
     fontSize: 16,
   },
   loginLink: {
-    color: '#FF6B35',
+    color: "#FF6B35",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

@@ -1,7 +1,7 @@
-import { Router } from 'express';
-import { supabaseAdmin } from '../db/supabase';
-import jwt from 'jsonwebtoken';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { Router } from "express";
+import jwt from "jsonwebtoken";
+import { supabaseAdmin } from "../db/supabase";
+import { authMiddleware, AuthRequest } from "../middleware/auth";
 
 const router = Router();
 
@@ -13,9 +13,9 @@ async function getOrCreateProfile(params: {
 }) {
   const { userId, email, phone, displayName } = params;
   const { data: existingProfile } = await supabaseAdmin
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
     .single();
 
   if (existingProfile) {
@@ -24,14 +24,14 @@ async function getOrCreateProfile(params: {
 
   const fallbackName =
     displayName?.trim() ||
-    (email ? email.split('@')[0] : null) ||
-    (phone ? `runner_${phone.slice(-4)}` : 'runner');
+    (email ? email.split("@")[0] : null) ||
+    (phone ? `runner_${phone.slice(-4)}` : "runner");
 
   const insertPayload: Record<string, any> = {
     id: userId,
-    phone: phone ?? '',
+    phone: phone ?? "",
     display_name: fallbackName,
-    city: '',
+    city: "",
     avatar_index: 0,
     level: 1,
     lifetime_xp: 0,
@@ -48,9 +48,9 @@ async function getOrCreateProfile(params: {
   insertPayload.lifetime_km = 0;
 
   const { data: createdProfile, error: createError } = await supabaseAdmin
-    .from('profiles')
+    .from("profiles")
     .insert(insertPayload)
-    .select('*')
+    .select("*")
     .single();
 
   if (createError) {
@@ -60,21 +60,29 @@ async function getOrCreateProfile(params: {
   return { profile: createdProfile, isNewUser: true };
 }
 
-router.post('/login', async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required', code: 'MISSING_PARAMS' });
+      return res
+        .status(400)
+        .json({ error: "Email and password required", code: "MISSING_PARAMS" });
     }
 
-    const { data: authData, error } = await supabaseAdmin.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data: authData, error } =
+      await supabaseAdmin.auth.signInWithPassword({
+        email,
+        password,
+      });
 
     if (error || !authData.user) {
-      return res.status(401).json({ error: error?.message || 'Invalid credentials', code: 'INVALID_CREDS' });
+      return res
+        .status(401)
+        .json({
+          error: error?.message || "Invalid credentials",
+          code: "INVALID_CREDS",
+        });
     }
 
     const { profile, isNewUser } = await getOrCreateProfile({
@@ -88,8 +96,8 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { user_id: authData.user.id, email },
-      process.env.ADMIN_JWT_SECRET || 'dev-secret',
-      { expiresIn: '30d' }
+      process.env.ADMIN_JWT_SECRET || "dev-secret",
+      { expiresIn: "30d" },
     );
 
     res.json({
@@ -98,17 +106,19 @@ router.post('/login', async (req, res) => {
       profile,
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed', code: 'LOGIN_ERROR' });
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Login failed", code: "LOGIN_ERROR" });
   }
 });
 
-router.post('/signup', async (req, res) => {
+router.post("/signup", async (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required', code: 'MISSING_PARAMS' });
+      return res
+        .status(400)
+        .json({ error: "Email and password required", code: "MISSING_PARAMS" });
     }
 
     const { data: authData, error } = await supabaseAdmin.auth.signUp({
@@ -117,7 +127,12 @@ router.post('/signup', async (req, res) => {
     });
 
     if (error || !authData.user) {
-      return res.status(400).json({ error: error?.message || 'Signup failed', code: 'SIGNUP_FAILED' });
+      return res
+        .status(400)
+        .json({
+          error: error?.message || "Signup failed",
+          code: "SIGNUP_FAILED",
+        });
     }
 
     const { profile, isNewUser } = await getOrCreateProfile({
@@ -131,8 +146,8 @@ router.post('/signup', async (req, res) => {
 
     const token = jwt.sign(
       { user_id: authData.user.id, email },
-      process.env.ADMIN_JWT_SECRET || 'dev-secret',
-      { expiresIn: '30d' }
+      process.env.ADMIN_JWT_SECRET || "dev-secret",
+      { expiresIn: "30d" },
     );
 
     res.json({
@@ -141,27 +156,31 @@ router.post('/signup', async (req, res) => {
       profile,
     });
   } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ error: 'Signup failed', code: 'SIGNUP_ERROR' });
+    console.error("Signup error:", error);
+    res.status(500).json({ error: "Signup failed", code: "SIGNUP_ERROR" });
   }
 });
 
-router.post('/verify-otp', async (req, res) => {
+router.post("/verify-otp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
 
     if (!phone || !otp) {
-      return res.status(400).json({ error: 'Phone and OTP required', code: 'MISSING_PARAMS' });
+      return res
+        .status(400)
+        .json({ error: "Phone and OTP required", code: "MISSING_PARAMS" });
     }
 
     const { data: otpData, error } = await supabaseAdmin.auth.verifyOtp({
       phone,
       token: otp,
-      type: 'sms',
+      type: "sms",
     });
 
     if (error || !otpData.user) {
-      return res.status(401).json({ error: 'Invalid OTP', code: 'INVALID_OTP' });
+      return res
+        .status(401)
+        .json({ error: "Invalid OTP", code: "INVALID_OTP" });
     }
 
     const { profile, isNewUser } = await getOrCreateProfile({
@@ -175,8 +194,8 @@ router.post('/verify-otp', async (req, res) => {
 
     const token = jwt.sign(
       { user_id: otpData.user.id, phone },
-      process.env.ADMIN_JWT_SECRET || 'dev-secret',
-      { expiresIn: '30d' }
+      process.env.ADMIN_JWT_SECRET || "dev-secret",
+      { expiresIn: "30d" },
     );
 
     res.json({
@@ -185,17 +204,21 @@ router.post('/verify-otp', async (req, res) => {
       profile,
     });
   } catch (error) {
-    console.error('Auth error:', error);
-    res.status(500).json({ error: 'Authentication failed', code: 'AUTH_ERROR' });
+    console.error("Auth error:", error);
+    res
+      .status(500)
+      .json({ error: "Authentication failed", code: "AUTH_ERROR" });
   }
 });
 
-router.post('/send-otp', async (req, res) => {
+router.post("/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
 
     if (!phone) {
-      return res.status(400).json({ error: 'Phone required', code: 'MISSING_PHONE' });
+      return res
+        .status(400)
+        .json({ error: "Phone required", code: "MISSING_PHONE" });
     }
 
     const { data, error } = await supabaseAdmin.auth.signInWithOtp({
@@ -203,22 +226,107 @@ router.post('/send-otp', async (req, res) => {
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message, code: 'OTP_SEND_FAILED' });
+      return res
+        .status(400)
+        .json({ error: error.message, code: "OTP_SEND_FAILED" });
     }
 
-    res.json({ success: true, message: 'OTP sent' });
+    res.json({ success: true, message: "OTP sent" });
   } catch (error) {
-    console.error('Send OTP error:', error);
-    res.status(500).json({ error: 'Failed to send OTP', code: 'OTP_SEND_ERROR' });
+    console.error("Send OTP error:", error);
+    res
+      .status(500)
+      .json({ error: "Failed to send OTP", code: "OTP_SEND_ERROR" });
   }
 });
 
-router.post('/oauth-login', async (req, res) => {
+router.post("/send-email-otp", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res
+        .status(400)
+        .json({ error: "Email required", code: "MISSING_EMAIL" });
+    }
+
+    const { data, error } = await supabaseAdmin.auth.signInWithOtp({
+      email,
+    });
+
+    if (error) {
+      return res
+        .status(400)
+        .json({ error: error.message, code: "EMAIL_OTP_SEND_FAILED" });
+    }
+
+    res.json({ success: true, message: "Email OTP sent" });
+  } catch (error) {
+    console.error("Send Email OTP error:", error);
+    res
+      .status(500)
+      .json({ error: "Failed to send email OTP", code: "EMAIL_OTP_SEND_ERROR" });
+  }
+});
+
+router.post("/verify-email-otp", async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res
+        .status(400)
+        .json({ error: "Email and OTP required", code: "MISSING_PARAMS" });
+    }
+
+    const { data: otpData, error } = await supabaseAdmin.auth.verifyOtp({
+      email,
+      token: otp,
+      type: "email",
+    });
+
+    if (error || !otpData.user) {
+      return res
+        .status(401)
+        .json({ error: "Invalid OTP", code: "INVALID_OTP" });
+    }
+
+    const { profile, isNewUser } = await getOrCreateProfile({
+      userId: otpData.user.id,
+      email: otpData.user.email || email,
+      phone: otpData.user.phone,
+      displayName:
+        otpData.user.user_metadata?.name ||
+        otpData.user.user_metadata?.full_name,
+    });
+
+    const token = jwt.sign(
+      { user_id: otpData.user.id, email: otpData.user.email },
+      process.env.ADMIN_JWT_SECRET || "dev-secret",
+      { expiresIn: "30d" },
+    );
+
+    res.json({
+      token,
+      is_new_user: isNewUser,
+      profile,
+    });
+  } catch (error) {
+    console.error("Verify Email OTP error:", error);
+    res
+      .status(500)
+      .json({ error: "Failed to verify OTP", code: "OTP_VERIFY_ERROR" });
+  }
+});
+
+router.post("/oauth-login", async (req, res) => {
   try {
     const { access_token: accessToken } = req.body;
 
     if (!accessToken) {
-      return res.status(400).json({ error: 'access_token required', code: 'MISSING_TOKEN' });
+      return res
+        .status(400)
+        .json({ error: "access_token required", code: "MISSING_TOKEN" });
     }
 
     const {
@@ -227,7 +335,9 @@ router.post('/oauth-login', async (req, res) => {
     } = await supabaseAdmin.auth.getUser(accessToken);
 
     if (error || !user) {
-      return res.status(401).json({ error: 'Invalid Supabase session', code: 'INVALID_SESSION' });
+      return res
+        .status(401)
+        .json({ error: "Invalid Supabase session", code: "INVALID_SESSION" });
     }
 
     const { profile, isNewUser } = await getOrCreateProfile({
@@ -239,8 +349,8 @@ router.post('/oauth-login', async (req, res) => {
 
     const token = jwt.sign(
       { user_id: user.id, email: user.email, phone: user.phone },
-      process.env.ADMIN_JWT_SECRET || 'dev-secret',
-      { expiresIn: '30d' }
+      process.env.ADMIN_JWT_SECRET || "dev-secret",
+      { expiresIn: "30d" },
     );
 
     res.json({
@@ -249,27 +359,178 @@ router.post('/oauth-login', async (req, res) => {
       profile,
     });
   } catch (error) {
-    console.error('OAuth login error:', error);
-    res.status(500).json({ error: 'OAuth login failed', code: 'OAUTH_ERROR' });
+    console.error("OAuth login error:", error);
+    res.status(500).json({ error: "OAuth login failed", code: "OAUTH_ERROR" });
   }
 });
 
-router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
+router.post("/scalekit/token", async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code) {
+      return res
+        .status(400)
+        .json({ error: "Authorization code required", code: "MISSING_CODE" });
+    }
+
+    const clientId = process.env.SCALEKIT_CLIENT_ID;
+    const clientSecret = process.env.SCALEKIT_CLIENT_SECRET;
+    const environmentUrl = process.env.SCALEKIT_ENVIRONMENT_URL;
+
+    if (!clientId || !clientSecret || !environmentUrl) {
+      return res
+        .status(500)
+        .json({ error: "Scalekit not configured", code: "CONFIG_ERROR" });
+    }
+
+    // Exchange authorization code for access token
+    const tokenResponse = await fetch(`${environmentUrl}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: `${process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"}/auth/scalekit/callback`,
+      }).toString(),
+    });
+
+    if (!tokenResponse.ok) {
+      const error = await tokenResponse.json();
+      return res
+        .status(401)
+        .json({
+          error: "Token exchange failed",
+          details: error,
+          code: "TOKEN_EXCHANGE_FAILED",
+        });
+    }
+
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+
+    if (!accessToken) {
+      return res
+        .status(401)
+        .json({ error: "No access token received", code: "NO_ACCESS_TOKEN" });
+    }
+
+    // Get user info from Scalekit
+    const userInfoResponse = await fetch(`${environmentUrl}/oauth/userinfo`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!userInfoResponse.ok) {
+      return res
+        .status(401)
+        .json({ error: "Failed to get user info", code: "USERINFO_ERROR" });
+    }
+
+    const userInfo = await userInfoResponse.json();
+    const email = userInfo.email;
+    const name = userInfo.name || userInfo.given_name || "User";
+
+    if (!email) {
+      return res
+        .status(400)
+        .json({
+          error: "Email not provided by auth provider",
+          code: "NO_EMAIL",
+        });
+    }
+
+    // Create or get Supabase user
+    let supabaseUser = null;
+
+    // Try to get existing user
+    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
+    supabaseUser = existingUsers?.users?.find((u) => u.email === email);
+
+    if (!supabaseUser) {
+      // Create new user in Supabase
+      const { data: newUser, error: createError } =
+        await supabaseAdmin.auth.admin.createUser({
+          email,
+          email_confirm: true,
+          user_metadata: {
+            name,
+            provider: "scalekit",
+            scalekit_id: userInfo.sub,
+          },
+        });
+
+      if (createError || !newUser) {
+        return res
+          .status(400)
+          .json({ error: "Failed to create user", code: "USER_CREATE_ERROR" });
+      }
+
+      supabaseUser = newUser;
+    }
+
+    if (!supabaseUser) {
+      return res
+        .status(500)
+        .json({ error: "Failed to authenticate user", code: "AUTH_ERROR" });
+    }
+
+    // Get or create profile
+    const { profile, isNewUser } = await getOrCreateProfile({
+      userId: supabaseUser.id,
+      email: supabaseUser.email,
+      displayName: name,
+    });
+
+    // Generate JWT token
+    const token = jwt.sign(
+      {
+        user_id: supabaseUser.id,
+        email: supabaseUser.email,
+        provider: "scalekit",
+      },
+      process.env.ADMIN_JWT_SECRET || "dev-secret",
+      { expiresIn: "30d" },
+    );
+
+    res.json({
+      token,
+      is_new_user: isNewUser,
+      profile,
+    });
+  } catch (error) {
+    console.error("Scalekit token exchange error:", error);
+    res
+      .status(500)
+      .json({ error: "Authentication failed", code: "AUTH_ERROR" });
+  }
+});
+
+router.get("/me", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', req.user!.id)
+      .from("profiles")
+      .select("*")
+      .eq("id", req.user!.id)
       .single();
 
     if (!profile) {
-      return res.status(404).json({ error: 'Profile not found', code: 'PROFILE_NOT_FOUND' });
+      return res
+        .status(404)
+        .json({ error: "Profile not found", code: "PROFILE_NOT_FOUND" });
     }
 
     res.json(profile);
   } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({ error: 'Failed to get profile', code: 'PROFILE_ERROR' });
+    console.error("Get profile error:", error);
+    res
+      .status(500)
+      .json({ error: "Failed to get profile", code: "PROFILE_ERROR" });
   }
 });
 
