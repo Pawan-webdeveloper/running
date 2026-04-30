@@ -1,22 +1,12 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { deleteStoredItem, getStoredItem, setStoredItem } from './authStorage';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://ujrmxfvhaifgdipzkmfb.supabase.co';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_KEY || '';
-
-if (!supabaseAnonKey) {
-  console.warn('EXPO_PUBLIC_SUPABASE_KEY is not set');
-}
-
-export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
-
-const defaultApiUrl = (() => {
-  const hostUri = Constants.expoConfig?.hostUri ?? Constants.expoGoConfig?.debuggerHost;
-  const host = hostUri?.split(':')[0];
-  return host ? `http://${host}:3000` : 'http://localhost:3000';
-})();
+// ─── API URL ─────────────────────────────────────────────────────────────────
+const hostUri =
+  Constants.expoConfig?.hostUri ?? (Constants.expoGoConfig as any)?.debuggerHost;
+const host = hostUri?.split(':')[0];
+const defaultApiUrl = host ? `http://${host}:3000` : 'http://localhost:3000';
 
 function normalizeApiUrl(url: string): string {
   if (Platform.OS === 'android') {
@@ -27,15 +17,17 @@ function normalizeApiUrl(url: string): string {
   return url;
 }
 
-import * as WebBrowser from 'expo-web-browser';
-import * as Linking from 'expo-linking';
+export const API_URL = normalizeApiUrl(
+  process.env.EXPO_PUBLIC_API_URL || defaultApiUrl,
+);
 
-const API_URL = normalizeApiUrl(process.env.EXPO_PUBLIC_API_URL || defaultApiUrl);
+console.log('API_URL:', API_URL);
 
+// ─── Token management ─────────────────────────────────────────────────────────
 let authToken: string | null = null;
 
 export async function setAuthToken(token: string) {
-  authToken = token;
+  authToken = token || null;
   if (token) {
     await setStoredItem('auth_token', token);
   } else {
@@ -48,9 +40,10 @@ export async function getAuthToken(): Promise<string | null> {
   return getStoredItem('auth_token');
 }
 
+// ─── Base fetch ───────────────────────────────────────────────────────────────
 async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = await getAuthToken();
-  
+
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers: {
@@ -68,247 +61,74 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
   return response.json();
 }
 
-export async function signInWithGoogle(): Promise<{ error?: string; data?: any }> {
-  try {
-    const redirectUrl = Linking.createURL('auth/callback');
-    
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: redirectUrl,
-        skipBrowserRedirect: true,
-      },
-    });
-
-    if (error) {
-      return { error: error.message };
-    }
-
-    if (data?.url) {
-      const result = await WebBrowser.openAuthSessionAsync(
-        data.url,
-        Linking.createURL('/')
-      );
-
-      if (result.type === 'success') {
-        const url = new URL(result.url);
-        
-        if (url.pathname === '/auth/callback' || url.searchParams.has('access_token')) {
-          const accessToken = url.searchParams.get('access_token');
-          const refreshToken = url.searchParams.get('refresh_token');
-
-          if (accessToken) {
-            await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: refreshToken || '',
-            });
-          } else {
-            return { error: 'Authentication failed' };
-          }
-        }
-      } else if (result.type === 'dismiss') {
-        return { error: 'Authentication cancelled' };
-      }
-    }
-
-    const { data: { session } } = await supabase.auth.getSession();
-
-    if (!session?.access_token) {
-      return { error: 'Failed to get session' };
-    }
-
-    const responseApi = await fetch(`${API_URL}/api/auth/oauth-login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: session.access_token }),
-    });
-
-    const backendData = await responseApi.json();
-    if (!responseApi.ok) {
-      return { error: backendData.error || 'Google login failed' };
-    }
-
-    return { data: backendData };
-  } catch (error: any) {
-    console.error('Google sign in error:', error);
-    return { error: error.message || 'Google sign in failed' };
-  }
-}
-
+// ─── Auth API ─────────────────────────────────────────────────────────────────
+// All auth flows go through ScaleKit's hosted page (lib/scalekit.ts).
+// These helpers are kept for session management and logout only.
 const auth = {
   getApiUrl: () => API_URL,
-  
-  signInWithGoogle,
 
-  login: async (email: string, password: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        return { error: data.error || 'Login failed' };
-      }
-
-      return { data };
-    } catch (error: any) {
-      return { error: error.message || 'Network error' };
-    }
-  },
-
-  signup: async (email: string, password: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/auth/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        return { error: data.error || 'Signup failed' };
-      }
-
-      return { data };
-    } catch (error: any) {
-      return { error: error.message || 'Network error' };
-    }
-  },
-
+  /** Clear the stored token and log the user out */
   signOut: async () => {
-    const { error } = await supabase.auth.signOut();
     await deleteStoredItem('auth_token');
+    await deleteStoredItem('user_data');
     authToken = null;
-    return { error: error?.message };
-  },
-
-  sendOtp: async (phone: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/auth/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        return { error: data.error || 'Failed to send OTP' };
-      }
-      return { data };
-    } catch (error: any) {
-      return { error: error.message || 'Network error' };
-    }
-  },
-
-  verifyOtp: async (phone: string, otp: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, otp }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        return { error: data.error || 'Failed to verify OTP' };
-      }
-      return { data };
-    } catch (error: any) {
-      return { error: error.message || 'Network error' };
-    }
-  },
-
-  sendEmailOtp: async (email: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/auth/send-email-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        return { error: data.error || 'Failed to send email OTP' };
-      }
-      return { data };
-    } catch (error: any) {
-      return { error: error.message || 'Network error' };
-    }
-  },
-
-  verifyEmailOtp: async (email: string, otp: string) => {
-    try {
-      const response = await fetch(`${API_URL}/api/auth/verify-email-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otp }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        return { error: data.error || 'Failed to verify email OTP' };
-      }
-      return { data };
-    } catch (error: any) {
-      return { error: error.message || 'Network error' };
-    }
+    return { error: undefined };
   },
 };
 
+// ─── Profile ──────────────────────────────────────────────────────────────────
 const profile = {
-  get: async () => {
-    return fetchApi<any>('/api/profile', { method: 'GET' });
-  },
+  get: async () => fetchApi<any>('/api/profile', { method: 'GET' }),
 
-  update: async (data: { display_name?: string; city?: string; avatar_index?: number }) => {
-    return fetchApi<any>('/api/profile', {
+  update: async (data: { display_name?: string; city?: string; avatar_index?: number }) =>
+    fetchApi<any>('/api/profile', {
       method: 'POST',
       body: JSON.stringify(data),
-    });
-  },
+    }),
 };
 
+// ─── Runs ─────────────────────────────────────────────────────────────────────
 const runs = {
-  start: async (gpsPoints: any[]) => {
-    return fetchApi<any>('/api/runs/start', {
+  start: async (gpsPoints: any[]) =>
+    fetchApi<any>('/api/runs/start', {
       method: 'POST',
       body: JSON.stringify({ gps_points: gpsPoints }),
-    });
-  },
+    }),
 
-  complete: async (runId: string, gpsPoints: any[], distanceMeters: number, durationSecs: number) => {
-    return fetchApi<any>(`/api/runs/${runId}/complete`, {
+  complete: async (
+    runId: string,
+    gpsPoints: any[],
+    distanceMeters: number,
+    durationSecs: number,
+  ) =>
+    fetchApi<any>(`/api/runs/${runId}/complete`, {
       method: 'POST',
       body: JSON.stringify({
         gps_points: gpsPoints,
         distance_meters: distanceMeters,
         duration_secs: durationSecs,
       }),
-    });
-  },
+    }),
 
-  getActive: async () => {
-    return fetchApi<any>('/api/runs/active', { method: 'GET' });
-  },
+  getActive: async () => fetchApi<any>('/api/runs/active', { method: 'GET' }),
 
-  getRecent: async (limit = 10) => {
-    return fetchApi<any>(`/api/runs/recent?limit=${limit}`, { method: 'GET' });
-  },
+  getRecent: async (limit = 10) =>
+    fetchApi<any>(`/api/runs/recent?limit=${limit}`, { method: 'GET' }),
 };
 
+// ─── Leaderboard ──────────────────────────────────────────────────────────────
 const leaderboard = {
-  get: async (scope: string = 'national', limit = 100) => {
-    return fetchApi<any>(`/api/leaderboard?scope=${scope}&limit=${limit}`, { method: 'GET' });
-  },
+  get: async (scope = 'national', limit = 100) =>
+    fetchApi<any>(`/api/leaderboard?scope=${scope}&limit=${limit}`, { method: 'GET' }),
 };
 
+// ─── Wallet ───────────────────────────────────────────────────────────────────
 const wallet = {
-  get: async () => {
-    return fetchApi<any>('/api/wallet', { method: 'GET' });
-  },
+  get: async () => fetchApi<any>('/api/wallet', { method: 'GET' }),
 };
 
+// ─── Export ───────────────────────────────────────────────────────────────────
 export const api = {
-  supabase,
   auth,
   profile,
   runs,

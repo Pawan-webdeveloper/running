@@ -106,9 +106,9 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     const result = await updateStreakAndXP(userId, {
       userId,
       user_id: userId,
-      distanceMeters,
+      distanceMeters: distance_meters,
       distance_meters: distance_meters,
-      durationSecs,
+      durationSecs: duration_seconds,
       duration_secs: duration_seconds,
       duration_seconds,
       avgPaceSecPerKm: avg_pace_sec_per_km,

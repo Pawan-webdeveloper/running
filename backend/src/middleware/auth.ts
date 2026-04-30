@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { supabaseAdmin } from '../db/supabase';
+import { db } from '../db/supabase';
 
 export interface AuthRequest extends Request {
   user?: {
     id: string;
-    phone: string;
+    email: string | null;
+    phone: string | null;
     role?: string;
   };
 }
@@ -13,7 +14,7 @@ export interface AuthRequest extends Request {
 export async function authMiddleware(
   req: AuthRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> {
   const authHeader = req.headers.authorization;
 
@@ -27,13 +28,14 @@ export async function authMiddleware(
   try {
     const decoded = jwt.verify(token, process.env.ADMIN_JWT_SECRET || 'dev-secret') as {
       user_id: string;
-      phone: string;
+      email?: string | null;
+      phone?: string | null;
       role?: string;
     };
 
-    const { data: profile } = await supabaseAdmin
+    const { data: profile } = await db
       .from('profiles')
-      .select('id, phone, is_banned')
+      .select('id, email, phone, is_banned')
       .eq('id', decoded.user_id)
       .single();
 
@@ -49,7 +51,8 @@ export async function authMiddleware(
 
     req.user = {
       id: profile.id,
-      phone: profile.phone,
+      email: profile.email ?? null,
+      phone: profile.phone ?? null,
       role: decoded.role,
     };
 
@@ -62,7 +65,7 @@ export async function authMiddleware(
 export async function adminMiddleware(
   req: AuthRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> {
   if (!req.user?.role || req.user.role !== 'admin') {
     res.status(403).json({ error: 'Admin access required', code: 'ADMIN_REQUIRED' });

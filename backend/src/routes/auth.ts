@@ -1,10 +1,28 @@
-import { Router } from "express";
-import jwt from "jsonwebtoken";
-import { supabaseAdmin } from "../db/supabase";
-import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { Router } from 'express';
+import jwt from 'jsonwebtoken';
+import { Scalekit } from '@scalekit-sdk/node';
+import { db } from '../db/supabase';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+// ─── ScaleKit client ────────────────────────────────────────────────────────
+const scalekit = new Scalekit(
+  process.env.SCALEKIT_ENVIRONMENT_URL!,
+  process.env.SCALEKIT_CLIENT_ID!,
+  process.env.SCALEKIT_CLIENT_SECRET!,
+);
+
+// The backend callback URL — must be registered in ScaleKit dashboard
+// In dev: http://localhost:3000/api/auth/callback
+// After ScaleKit exchanges the code it deep-links back to the Expo app
+const BACKEND_CALLBACK_URL =
+  process.env.SCALEKIT_REDIRECT_URI || 'http://localhost:3000/api/auth/callback';
+
+// Expo deep-link scheme the app listens on (e.g. "runzilla://")
+const APP_SCHEME = process.env.EXPO_APP_SCHEME || 'runzilla';
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 async function getOrCreateProfile(params: {
   userId: string;
   email?: string | null;
@@ -12,525 +30,170 @@ async function getOrCreateProfile(params: {
   displayName?: string | null;
 }) {
   const { userId, email, phone, displayName } = params;
-  const { data: existingProfile } = await supabaseAdmin
-    .from("profiles")
-    .select("*")
-    .eq("id", userId)
+
+  const { data: existing } = await db
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
     .single();
 
-  if (existingProfile) {
-    return { profile: existingProfile, isNewUser: false };
-  }
+  if (existing) return { profile: existing, isNewUser: false };
 
   const fallbackName =
     displayName?.trim() ||
-    (email ? email.split("@")[0] : null) ||
-    (phone ? `runner_${phone.slice(-4)}` : "runner");
+    (email ? email.split('@')[0] : null) ||
+    (phone ? `runner_${phone.slice(-4)}` : 'runner');
 
-  const insertPayload: Record<string, any> = {
-    id: userId,
-    phone: phone ?? "",
-    display_name: fallbackName,
-    city: "",
-    avatar_index: 0,
-    level: 1,
-    lifetime_xp: 0,
-    streak_days: 0,
-  };
-
-  if (email) {
-    insertPayload.email = email;
-  }
-  insertPayload.name = fallbackName;
-  insertPayload.avatar = null;
-  insertPayload.xp = 0;
-  insertPayload.badges = [];
-  insertPayload.lifetime_km = 0;
-
-  const { data: createdProfile, error: createError } = await supabaseAdmin
-    .from("profiles")
-    .insert(insertPayload)
-    .select("*")
+  const { data: created, error } = await db
+    .from('profiles')
+    .insert({
+      id: userId,
+      email: email ?? null,
+      phone: phone ?? '',
+      display_name: fallbackName,
+      name: fallbackName,
+      avatar: null,
+      avatar_index: 0,
+      city: '',
+      xp: 0,
+      level: 1,
+      lifetime_xp: 0,
+      streak_days: 0,
+      badges: [],
+      lifetime_km: 0,
+    })
+    .select('*')
     .single();
 
-  if (createError) {
-    throw createError;
-  }
-
-  return { profile: createdProfile, isNewUser: true };
+  if (error) throw error;
+  return { profile: created, isNewUser: true };
 }
 
-router.post("/login", async (req, res) => {
+function mintJwt(userId: string, email?: string | null, phone?: string | null) {
+  return jwt.sign(
+    { user_id: userId, email: email ?? null, phone: phone ?? null },
+    process.env.ADMIN_JWT_SECRET || 'dev-secret',
+    { expiresIn: '30d' },
+  );
+}
+
+// ─── Route 1: Get the ScaleKit authorization URL ─────────────────────────────
+// The mobile app hits this to get the hosted-login URL to open in the browser.
+// GET /api/auth/authorize
+// Returns: { url: "https://time.scalekit.dev/oauth/authorize?..." }
+router.get('/authorize', (req, res) => {
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Email and password required", code: "MISSING_PARAMS" });
-    }
-
-    const { data: authData, error } =
-      await supabaseAdmin.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-    if (error || !authData.user) {
-      return res
-        .status(401)
-        .json({
-          error: error?.message || "Invalid credentials",
-          code: "INVALID_CREDS",
-        });
-    }
-
-    const { profile, isNewUser } = await getOrCreateProfile({
-      userId: authData.user.id,
-      email: authData.user.email,
-      phone: authData.user.phone,
-      displayName:
-        authData.user.user_metadata?.name ||
-        authData.user.user_metadata?.full_name,
+    const url = scalekit.getAuthorizationUrl(BACKEND_CALLBACK_URL, {
+      scopes: ['openid', 'profile', 'email', 'offline_access'],
     });
-
-    const token = jwt.sign(
-      { user_id: authData.user.id, email },
-      process.env.ADMIN_JWT_SECRET || "dev-secret",
-      { expiresIn: "30d" },
-    );
-
-    res.json({
-      token,
-      is_new_user: isNewUser,
-      profile,
-    });
-  } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ error: "Login failed", code: "LOGIN_ERROR" });
+    res.json({ url });
+  } catch (err) {
+    console.error('getAuthorizationUrl error:', err);
+    res.status(500).json({ error: 'Failed to build auth URL' });
   }
 });
 
-router.post("/signup", async (req, res) => {
+// ─── Route 2: ScaleKit OAuth callback ────────────────────────────────────────
+// ScaleKit redirects here with ?code=... after the user authenticates.
+// We exchange the code, create/find the profile, mint our JWT, then
+// deep-link back into the Expo app so the app can capture the token.
+// GET /api/auth/callback?code=...
+router.get('/callback', async (req, res) => {
+  const { code, error, error_description } = req.query as Record<string, string>;
+
+  if (error) {
+    console.error('ScaleKit callback error:', error, error_description);
+    // Deep-link back to app with the error
+    const appUrl = `${APP_SCHEME}://auth/callback?error=${encodeURIComponent(error)}&error_description=${encodeURIComponent(error_description || '')}`;
+    return res.redirect(appUrl);
+  }
+
+  if (!code) {
+    return res.status(400).json({ error: 'No code provided' });
+  }
+
   try {
-    const { email, password } = req.body;
+    const authResult = await scalekit.authenticateWithCode(code, BACKEND_CALLBACK_URL);
+    const { user } = authResult;
 
-    if (!email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Email and password required", code: "MISSING_PARAMS" });
-    }
+    const userId = user.id;
+    const email = user.email ?? null;
+    const name = user.name ?? user.givenName ?? null;
 
-    const { data: authData, error } = await supabaseAdmin.auth.signUp({
+    const { profile, isNewUser } = await getOrCreateProfile({
+      userId,
       email,
-      password,
-    });
-
-    if (error || !authData.user) {
-      return res
-        .status(400)
-        .json({
-          error: error?.message || "Signup failed",
-          code: "SIGNUP_FAILED",
-        });
-    }
-
-    const { profile, isNewUser } = await getOrCreateProfile({
-      userId: authData.user.id,
-      email: authData.user.email,
-      phone: authData.user.phone,
-      displayName:
-        authData.user.user_metadata?.name ||
-        authData.user.user_metadata?.full_name,
-    });
-
-    const token = jwt.sign(
-      { user_id: authData.user.id, email },
-      process.env.ADMIN_JWT_SECRET || "dev-secret",
-      { expiresIn: "30d" },
-    );
-
-    res.json({
-      token,
-      is_new_user: isNewUser,
-      profile,
-    });
-  } catch (error) {
-    console.error("Signup error:", error);
-    res.status(500).json({ error: "Signup failed", code: "SIGNUP_ERROR" });
-  }
-});
-
-router.post("/verify-otp", async (req, res) => {
-  try {
-    const { phone, otp } = req.body;
-
-    if (!phone || !otp) {
-      return res
-        .status(400)
-        .json({ error: "Phone and OTP required", code: "MISSING_PARAMS" });
-    }
-
-    const { data: otpData, error } = await supabaseAdmin.auth.verifyOtp({
-      phone,
-      token: otp,
-      type: "sms",
-    });
-
-    if (error || !otpData.user) {
-      return res
-        .status(401)
-        .json({ error: "Invalid OTP", code: "INVALID_OTP" });
-    }
-
-    const { profile, isNewUser } = await getOrCreateProfile({
-      userId: otpData.user.id,
-      email: otpData.user.email,
-      phone: otpData.user.phone || phone,
-      displayName:
-        otpData.user.user_metadata?.name ||
-        otpData.user.user_metadata?.full_name,
-    });
-
-    const token = jwt.sign(
-      { user_id: otpData.user.id, phone },
-      process.env.ADMIN_JWT_SECRET || "dev-secret",
-      { expiresIn: "30d" },
-    );
-
-    res.json({
-      token,
-      is_new_user: isNewUser,
-      profile,
-    });
-  } catch (error) {
-    console.error("Auth error:", error);
-    res
-      .status(500)
-      .json({ error: "Authentication failed", code: "AUTH_ERROR" });
-  }
-});
-
-router.post("/send-otp", async (req, res) => {
-  try {
-    const { phone } = req.body;
-
-    if (!phone) {
-      return res
-        .status(400)
-        .json({ error: "Phone required", code: "MISSING_PHONE" });
-    }
-
-    const { data, error } = await supabaseAdmin.auth.signInWithOtp({
-      phone,
-    });
-
-    if (error) {
-      return res
-        .status(400)
-        .json({ error: error.message, code: "OTP_SEND_FAILED" });
-    }
-
-    res.json({ success: true, message: "OTP sent" });
-  } catch (error) {
-    console.error("Send OTP error:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to send OTP", code: "OTP_SEND_ERROR" });
-  }
-});
-
-router.post("/send-email-otp", async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res
-        .status(400)
-        .json({ error: "Email required", code: "MISSING_EMAIL" });
-    }
-
-    const { data, error } = await supabaseAdmin.auth.signInWithOtp({
-      email,
-    });
-
-    if (error) {
-      return res
-        .status(400)
-        .json({ error: error.message, code: "EMAIL_OTP_SEND_FAILED" });
-    }
-
-    res.json({ success: true, message: "Email OTP sent" });
-  } catch (error) {
-    console.error("Send Email OTP error:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to send email OTP", code: "EMAIL_OTP_SEND_ERROR" });
-  }
-});
-
-router.post("/verify-email-otp", async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-
-    if (!email || !otp) {
-      return res
-        .status(400)
-        .json({ error: "Email and OTP required", code: "MISSING_PARAMS" });
-    }
-
-    const { data: otpData, error } = await supabaseAdmin.auth.verifyOtp({
-      email,
-      token: otp,
-      type: "email",
-    });
-
-    if (error || !otpData.user) {
-      return res
-        .status(401)
-        .json({ error: "Invalid OTP", code: "INVALID_OTP" });
-    }
-
-    const { profile, isNewUser } = await getOrCreateProfile({
-      userId: otpData.user.id,
-      email: otpData.user.email || email,
-      phone: otpData.user.phone,
-      displayName:
-        otpData.user.user_metadata?.name ||
-        otpData.user.user_metadata?.full_name,
-    });
-
-    const token = jwt.sign(
-      { user_id: otpData.user.id, email: otpData.user.email },
-      process.env.ADMIN_JWT_SECRET || "dev-secret",
-      { expiresIn: "30d" },
-    );
-
-    res.json({
-      token,
-      is_new_user: isNewUser,
-      profile,
-    });
-  } catch (error) {
-    console.error("Verify Email OTP error:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to verify OTP", code: "OTP_VERIFY_ERROR" });
-  }
-});
-
-router.post("/oauth-login", async (req, res) => {
-  try {
-    const { access_token: accessToken } = req.body;
-
-    if (!accessToken) {
-      return res
-        .status(400)
-        .json({ error: "access_token required", code: "MISSING_TOKEN" });
-    }
-
-    const {
-      data: { user },
-      error,
-    } = await supabaseAdmin.auth.getUser(accessToken);
-
-    if (error || !user) {
-      return res
-        .status(401)
-        .json({ error: "Invalid Supabase session", code: "INVALID_SESSION" });
-    }
-
-    const { profile, isNewUser } = await getOrCreateProfile({
-      userId: user.id,
-      email: user.email,
-      phone: user.phone,
-      displayName: user.user_metadata?.name || user.user_metadata?.full_name,
-    });
-
-    const token = jwt.sign(
-      { user_id: user.id, email: user.email, phone: user.phone },
-      process.env.ADMIN_JWT_SECRET || "dev-secret",
-      { expiresIn: "30d" },
-    );
-
-    res.json({
-      token,
-      is_new_user: isNewUser,
-      profile,
-    });
-  } catch (error) {
-    console.error("OAuth login error:", error);
-    res.status(500).json({ error: "OAuth login failed", code: "OAUTH_ERROR" });
-  }
-});
-
-router.post("/scalekit/token", async (req, res) => {
-  try {
-    const { code } = req.body;
-
-    if (!code) {
-      return res
-        .status(400)
-        .json({ error: "Authorization code required", code: "MISSING_CODE" });
-    }
-
-    const clientId = process.env.SCALEKIT_CLIENT_ID;
-    const clientSecret = process.env.SCALEKIT_CLIENT_SECRET;
-    const environmentUrl = process.env.SCALEKIT_ENVIRONMENT_URL;
-
-    if (!clientId || !clientSecret || !environmentUrl) {
-      return res
-        .status(500)
-        .json({ error: "Scalekit not configured", code: "CONFIG_ERROR" });
-    }
-
-    // Exchange authorization code for access token
-    const tokenResponse = await fetch(`${environmentUrl}/oauth/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: `${process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"}/auth/scalekit/callback`,
-      }).toString(),
-    });
-
-    if (!tokenResponse.ok) {
-      const error = await tokenResponse.json();
-      return res
-        .status(401)
-        .json({
-          error: "Token exchange failed",
-          details: error,
-          code: "TOKEN_EXCHANGE_FAILED",
-        });
-    }
-
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-
-    if (!accessToken) {
-      return res
-        .status(401)
-        .json({ error: "No access token received", code: "NO_ACCESS_TOKEN" });
-    }
-
-    // Get user info from Scalekit
-    const userInfoResponse = await fetch(`${environmentUrl}/oauth/userinfo`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!userInfoResponse.ok) {
-      return res
-        .status(401)
-        .json({ error: "Failed to get user info", code: "USERINFO_ERROR" });
-    }
-
-    const userInfo = await userInfoResponse.json();
-    const email = userInfo.email;
-    const name = userInfo.name || userInfo.given_name || "User";
-
-    if (!email) {
-      return res
-        .status(400)
-        .json({
-          error: "Email not provided by auth provider",
-          code: "NO_EMAIL",
-        });
-    }
-
-    // Create or get Supabase user
-    let supabaseUser = null;
-
-    // Try to get existing user
-    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
-    supabaseUser = existingUsers?.users?.find((u) => u.email === email);
-
-    if (!supabaseUser) {
-      // Create new user in Supabase
-      const { data: newUser, error: createError } =
-        await supabaseAdmin.auth.admin.createUser({
-          email,
-          email_confirm: true,
-          user_metadata: {
-            name,
-            provider: "scalekit",
-            scalekit_id: userInfo.sub,
-          },
-        });
-
-      if (createError || !newUser) {
-        return res
-          .status(400)
-          .json({ error: "Failed to create user", code: "USER_CREATE_ERROR" });
-      }
-
-      supabaseUser = newUser;
-    }
-
-    if (!supabaseUser) {
-      return res
-        .status(500)
-        .json({ error: "Failed to authenticate user", code: "AUTH_ERROR" });
-    }
-
-    // Get or create profile
-    const { profile, isNewUser } = await getOrCreateProfile({
-      userId: supabaseUser.id,
-      email: supabaseUser.email,
       displayName: name,
     });
 
-    // Generate JWT token
-    const token = jwt.sign(
-      {
-        user_id: supabaseUser.id,
-        email: supabaseUser.email,
-        provider: "scalekit",
-      },
-      process.env.ADMIN_JWT_SECRET || "dev-secret",
-      { expiresIn: "30d" },
-    );
+    const token = mintJwt(userId, email);
 
-    res.json({
-      token,
-      is_new_user: isNewUser,
-      profile,
-    });
-  } catch (error) {
-    console.error("Scalekit token exchange error:", error);
-    res
-      .status(500)
-      .json({ error: "Authentication failed", code: "AUTH_ERROR" });
+    // Deep-link back into the Expo app with the token
+    const appUrl =
+      `${APP_SCHEME}://auth/callback` +
+      `?token=${encodeURIComponent(token)}` +
+      `&is_new_user=${isNewUser}` +
+      `&profile=${encodeURIComponent(JSON.stringify(profile))}`;
+
+    res.redirect(appUrl);
+  } catch (err: any) {
+    console.error('Callback exchange error:', err);
+    const appUrl = `${APP_SCHEME}://auth/callback?error=${encodeURIComponent('Authentication failed')}`;
+    res.redirect(appUrl);
   }
 });
 
-router.get("/me", authMiddleware, async (req: AuthRequest, res) => {
+// ─── Route 3: POST token exchange (alternative - called from mobile directly) ─
+// The mobile app can send the code here and get JSON back instead of a redirect.
+// POST /api/auth/token  { code }
+router.post('/token', async (req, res) => {
+  const { code } = req.body;
+
+  if (!code) {
+    return res.status(400).json({ error: 'Authorization code required', code: 'MISSING_CODE' });
+  }
+
   try {
-    const { data: profile } = await supabaseAdmin
-      .from("profiles")
-      .select("*")
-      .eq("id", req.user!.id)
+    const authResult = await scalekit.authenticateWithCode(code, BACKEND_CALLBACK_URL);
+    const { user } = authResult;
+
+    const userId = user.id;
+    const email = user.email ?? null;
+    const name = user.name ?? user.givenName ?? null;
+
+    const { profile, isNewUser } = await getOrCreateProfile({
+      userId,
+      email,
+      displayName: name,
+    });
+
+    const token = mintJwt(userId, email);
+
+    res.json({ token, profile, is_new_user: isNewUser });
+  } catch (err: any) {
+    console.error('Token exchange error:', err);
+    res.status(401).json({ error: 'Token exchange failed', code: 'TOKEN_EXCHANGE_FAILED' });
+  }
+});
+
+// ─── Route 4: Get current user profile ───────────────────────────────────────
+// GET /api/auth/me
+router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { data: profile } = await db
+      .from('profiles')
+      .select('*')
+      .eq('id', req.user!.id)
       .single();
 
     if (!profile) {
-      return res
-        .status(404)
-        .json({ error: "Profile not found", code: "PROFILE_NOT_FOUND" });
+      return res.status(404).json({ error: 'Profile not found', code: 'PROFILE_NOT_FOUND' });
     }
 
     res.json(profile);
-  } catch (error) {
-    console.error("Get profile error:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to get profile", code: "PROFILE_ERROR" });
+  } catch (err) {
+    console.error('Get profile error:', err);
+    res.status(500).json({ error: 'Failed to get profile', code: 'PROFILE_ERROR' });
   }
 });
 
